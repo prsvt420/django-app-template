@@ -1,0 +1,77 @@
+name: django_app_template
+
+volumes:
+  postgres_data:
+  static_files:
+  media_files:
+
+services:
+  database:
+    container_name: postgres
+    env_file:
+      - .env
+    image: postgres
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: always
+
+  redis:
+    container_name: redis
+    image: redis
+    restart: always
+
+  django:
+    container_name: django
+    env_file:
+      - .env
+    build: .
+    volumes:
+      - static_files:/app/staticfiles
+      - media_files:/app/media
+      - ./:/app
+    restart: always
+    expose:
+      - 8000
+    depends_on:
+      - database
+      - redis
+      - celery
+    command: sh -c "make migrate &&
+                    make loaddata &&
+                    make collectstatic &&
+                    make run-prod"
+
+  celery:
+    container_name: celery
+    build:
+      context: .
+    restart: always
+    depends_on:
+      - redis
+    volumes:
+      - ./:/app
+    command: poetry run celery -A django_app_template worker -l info
+
+  nginx:
+    container_name: nginx
+    build:
+      context: ./nginx
+    ports:
+      - "80:80"
+      - "443:443"
+    depends_on:
+      - django
+    volumes:
+      - static_files:/app/staticfiles
+      - media_files:/app/media
+      - ./nginx/certbot:/var/www/certbot
+      - /etc/letsencrypt:/etc/letsencrypt
+    restart: always
+
+  certbot:
+    container_name: certbot
+    image: certbot/certbot
+    volumes:
+      - ./nginx/certbot:/var/www/certbot
+      - /etc/letsencrypt:/etc/letsencrypt
+    entrypoint: "/bin/sh -c 'trap exit TERM; while :; do certbot renew; sleep 12h & wait $${!}; done;'"
